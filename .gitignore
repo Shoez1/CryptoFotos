@@ -22,3 +22,4 @@ Thumbs.db
 *.bak
 
 # Não ignore o login.txt, crypt.ico, README.md, nem arquivos de código/projeto
+login.txt
