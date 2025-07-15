@@ -1,0 +1,24 @@
+# Build results
+bin/
+obj/
+*.user
+*.suo
+*.vs/
+*.exe
+*.dll
+*.pdb
+*.cache
+*.log
+
+# Visual Studio Code
+.vscode/
+
+# Sistema operacional
+Thumbs.db
+.DS_Store
+
+# Outros arquivos temporários
+*.tmp
+*.bak
+
+# Não ignore o login.txt, crypt.ico, README.md, nem arquivos de código/projeto
