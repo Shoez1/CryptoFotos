@@ -1,3 +1,6 @@
-senhapadrao:sim
-admin:1234
-dicadesenha:admin
+version:1.5
+usuario:user
+salt:LuI5bdjFgCv+4ITCYP6B8w==
+senhahash:S1OFHbYrjkqPIKfOc5i3IkWMkeRu07I0w/iOzz9yhP8=
+iteracoes:210000
+dicadesenha:dica

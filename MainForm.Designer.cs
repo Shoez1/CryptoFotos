@@ -9,6 +9,9 @@ namespace CryptoFotos
         private System.Windows.Forms.Button btnDecryptFolder;
         private System.Windows.Forms.Button btnPreviewGallery;
         private System.Windows.Forms.Panel panelGallery;
+        private System.Windows.Forms.ProgressBar progressBar;
+        private System.Windows.Forms.Label lblStatus;
+        private System.Windows.Forms.Button btnCancel;
 
         protected override void Dispose(bool disposing)
         {
@@ -27,6 +30,9 @@ namespace CryptoFotos
             this.btnDecryptFolder = new System.Windows.Forms.Button();
             this.btnPreviewGallery = new System.Windows.Forms.Button();
             this.panelGallery = new System.Windows.Forms.Panel();
+            this.progressBar = new System.Windows.Forms.ProgressBar();
+            this.lblStatus = new System.Windows.Forms.Label();
+            this.btnCancel = new System.Windows.Forms.Button();
             this.txtFolderPath.AllowDrop = true;
             this.txtFolderPath.DragEnter += new System.Windows.Forms.DragEventHandler(this.txtFolderPath_DragEnter);
             this.txtFolderPath.DragDrop += new System.Windows.Forms.DragEventHandler(this.txtFolderPath_DragDrop);
@@ -81,18 +87,50 @@ namespace CryptoFotos
             // 
             // panelGallery
             // 
+            this.panelGallery.AutoScroll = true;
+            this.panelGallery.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
             this.panelGallery.Location = new System.Drawing.Point(20, 140);
             this.panelGallery.Name = "panelGallery";
             this.panelGallery.Size = new System.Drawing.Size(350, 180);
             this.panelGallery.TabIndex = 5;
-            this.panelGallery.AutoScroll = true;
-            this.panelGallery.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+            // 
+            // progressBar
+            // 
+            this.progressBar.Location = new System.Drawing.Point(20, 330);
+            this.progressBar.Name = "progressBar";
+            this.progressBar.Size = new System.Drawing.Size(250, 20);
+            this.progressBar.TabIndex = 6;
+            this.progressBar.Visible = false;
+            // 
+            // lblStatus
+            // 
+            this.lblStatus.Location = new System.Drawing.Point(20, 310);
+            this.lblStatus.Name = "lblStatus";
+            this.lblStatus.Size = new System.Drawing.Size(350, 17);
+            this.lblStatus.TabIndex = 7;
+            this.lblStatus.Text = "";
+            this.lblStatus.Visible = false;
+            // 
+            // btnCancel
+            // 
+            this.btnCancel.Location = new System.Drawing.Point(280, 330);
+            this.btnCancel.Name = "btnCancel";
+            this.btnCancel.Size = new System.Drawing.Size(90, 23);
+            this.btnCancel.TabIndex = 8;
+            this.btnCancel.Text = "Cancelar";
+            this.btnCancel.UseVisualStyleBackColor = true;
+            this.btnCancel.Visible = false;
+            this.btnCancel.Click += new System.EventHandler(this.btnCancel_Click);
             // 
             // MainForm
             // 
+            this.AllowDrop = true;
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(390, 340);
+            this.ClientSize = new System.Drawing.Size(390, 370);
+            this.Controls.Add(this.btnCancel);
+            this.Controls.Add(this.progressBar);
+            this.Controls.Add(this.lblStatus);
             this.Controls.Add(this.panelGallery);
             this.Controls.Add(this.btnPreviewGallery);
             this.Controls.Add(this.btnDecryptFolder);
@@ -100,7 +138,6 @@ namespace CryptoFotos
             this.Controls.Add(this.btnSelectFolder);
             this.Controls.Add(this.txtFolderPath);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
-            this.AllowDrop = true;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.Name = "MainForm";
