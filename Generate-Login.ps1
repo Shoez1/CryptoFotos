@@ -1,9 +1,8 @@
-param(
+﻿param(
     [string]$OutputPath = "login.txt",
     [string]$UserName,
-    [string]$PasswordPlaintext,
     [string]$Hint,
-    [int]$Iterations = 210000
+    [int]$Iterations = 600000
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,26 +19,38 @@ function Read-RequiredValue {
 
     $value = Read-Host $Prompt
     if ([string]::IsNullOrWhiteSpace($value)) {
-        throw "$Prompt invalido."
+        throw "$Prompt inválido."
     }
 
     return $value
 }
 
 function Read-PasswordValue {
-    param([string]$CurrentValue)
-
-    if (-not [string]::IsNullOrWhiteSpace($CurrentValue)) {
-        return $CurrentValue
-    }
-
     $securePassword = Read-Host "Senha do programa" -AsSecureString
     $password = [System.Net.NetworkCredential]::new('', $securePassword).Password
     if ([string]::IsNullOrWhiteSpace($password)) {
-        throw "Senha invalida."
+        throw "Senha inválida."
     }
 
     return $password
+}
+
+function Protect-LoginFileAcl {
+    param([string]$Path)
+
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $system = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")
+    $administrators = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
+
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($currentUser, $rights, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, $rights, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($administrators, $rights, $allow)))
+    $acl.SetAccessRuleProtection($true, $false)
+    Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
 Add-Type -TypeDefinition @"
@@ -114,7 +125,11 @@ public static class CryptoFotosCompat
 "@
 
 $UserName = Read-RequiredValue -Prompt "Usuario do programa" -CurrentValue $UserName
-$PasswordPlaintext = Read-PasswordValue -CurrentValue $PasswordPlaintext
+$PasswordPlaintext = Read-PasswordValue
+
+if ($Iterations -lt 210000) {
+    throw "Iteracoes precisa ser 210000 ou maior."
+}
 
 if ($Hint -eq $null) {
     $Hint = Read-Host "Dica de senha (opcional)"
@@ -152,5 +167,8 @@ else {
 $outputFilePath = Join-Path $outputDirectory $outputFileName
 $encoding = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllLines($outputFilePath, $lines, $encoding)
+Protect-LoginFileAcl -Path $outputFilePath
+
+[System.GC]::Collect()
 
 Write-Host "login.txt gerado com hash PBKDF2-SHA256 em $outputFilePath."

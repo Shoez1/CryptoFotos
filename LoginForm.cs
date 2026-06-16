@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows.Forms;
 using CryptoFotos.Utils;
 
@@ -25,16 +25,7 @@ namespace CryptoFotos
 
         private void ApplyLoginConfiguration()
         {
-            if (loginConfiguration.UseDynamicPassword)
-            {
-                lblHint.Text = "Dica de senha: +d-h";
-                lblHint.Visible = true;
-                lblUser.Visible = false;
-                txtUser.Visible = false;
-                lblPass.Location = new System.Drawing.Point(lblPass.Location.X, lblUser.Location.Y);
-                txtPass.Location = new System.Drawing.Point(txtPass.Location.X, txtUser.Location.Y);
-            }
-            else if (!string.IsNullOrEmpty(loginConfiguration.Hint))
+            if (!string.IsNullOrEmpty(loginConfiguration.Hint))
             {
                 lblHint.Text = $"Dica de senha: {loginConfiguration.Hint}";
                 lblHint.Visible = true;
@@ -87,34 +78,21 @@ namespace CryptoFotos
                 TimeSpan remaining = lockoutUntilUtc - DateTime.UtcNow;
                 MessageBox.Show(
                     $"Muitas tentativas de login. Aguarde {Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds))} segundos.",
-                    "Proteção",
+                    "Protecao",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
                 return;
             }
 
-            if (loginConfiguration.UseDynamicPassword)
-            {
-                string expectedPassword = loginConfiguration.GetExpectedDynamicPassword(DateTime.Now);
-                if (string.Equals(txtPass.Text, expectedPassword, StringComparison.Ordinal))
-                {
-                    DialogResult = DialogResult.OK;
-                    Close();
-                    return;
-                }
-
-                RegisterFailure("Senha dinâmica inválida!");
-                return;
-            }
-
             if (loginConfiguration.ValidateCredentials(txtUser.Text, txtPass.Text))
             {
+                txtPass.Text = string.Empty;
                 DialogResult = DialogResult.OK;
                 Close();
                 return;
             }
 
-            RegisterFailure("Usuário ou senha inválidos!");
+            RegisterFailure("Usuario ou senha inválidos!");
         }
     }
 }

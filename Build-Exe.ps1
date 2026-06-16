@@ -1,11 +1,10 @@
-param(
+﻿param(
     [string]$Project = "CryptoFotos.csproj",
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-x64",
     [switch]$ForceRegenerateLogin,
     [switch]$UseExistingLogin,
     [string]$LoginUserName,
-    [string]$LoginPasswordPlaintext,
     [string]$LoginHint
 )
 
@@ -37,20 +36,10 @@ function Read-RequiredValue {
 
     $value = Read-Host $Prompt
     if ([string]::IsNullOrWhiteSpace($value)) {
-        throw ("{0} invalido." -f $Prompt)
+        throw ("{0} inválido." -f $Prompt)
     }
 
     return $value
-}
-
-function Read-PasswordValue {
-    $securePassword = Read-Host "Senha do programa" -AsSecureString
-    $password = [System.Net.NetworkCredential]::new('', $securePassword).Password
-    if ([string]::IsNullOrWhiteSpace($password)) {
-        throw "Senha invalida."
-    }
-
-    return $password
 }
 
 function Invoke-And-Log {
@@ -73,10 +62,88 @@ function Get-TargetFramework {
     [xml]$projectXml = Get-Content -LiteralPath $CsprojPath
     $framework = $projectXml.Project.PropertyGroup.TargetFramework | Select-Object -First 1
     if ([string]::IsNullOrWhiteSpace($framework)) {
-        throw "Nao foi possivel identificar o TargetFramework no arquivo do projeto."
+        throw "Não foi possível identificar o TargetFramework no arquivo do projeto."
     }
 
     return $framework
+}
+
+function Clear-PublishDirectory {
+    param(
+        [string]$ProjectRootPath,
+        [string]$PublishDirectory
+    )
+
+    if (-not (Test-Path -LiteralPath $PublishDirectory)) {
+        return
+    }
+
+    $resolvedProjectRoot = [System.IO.Path]::GetFullPath($ProjectRootPath.TrimEnd('\') + '\')
+    $resolvedPublishDirectory = [System.IO.Path]::GetFullPath($PublishDirectory)
+
+    if (-not $resolvedPublishDirectory.StartsWith($resolvedProjectRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw ("Caminho de publish inválido para limpeza: {0}" -f $resolvedPublishDirectory)
+    }
+
+    Write-Log "INFO" ("Limpando publish anterior em {0}" -f $PublishDirectory)
+    Remove-Item -LiteralPath $PublishDirectory -Recurse -Force
+}
+
+function Assert-PortableSingleExe {
+    param(
+        [string]$PublishDirectory,
+        [string]$ExpectedExePath
+    )
+
+    if (-not (Test-Path -LiteralPath $ExpectedExePath)) {
+        Write-Log "AVISO" "O build terminou, mas o EXE não foi localizado no caminho esperado."
+        Write-Host $ExpectedExePath
+        return $false
+    }
+
+    $extraFiles = Get-ChildItem -LiteralPath $PublishDirectory -File |
+        Where-Object { -not [string]::Equals($_.FullName, $ExpectedExePath, [System.StringComparison]::OrdinalIgnoreCase) }
+
+    if ($extraFiles) {
+        $extraNames = ($extraFiles | ForEach-Object { $_.Name }) -join ", "
+        throw ("O build gerou arquivos extras ao lado do EXE: {0}. O executável final não está portátil sozinho." -f $extraNames)
+    }
+
+    return $true
+}
+
+function Assert-SafeLoginFile {
+    param(
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "login.txt não encontrado."
+    }
+
+    $content = Get-Content -LiteralPath $Path
+    if ($content -match '^\s*senhapadrao\s*:\s*sim\s*$') {
+        throw "login.txt usa senhapadrao, que foi removido por segurança."
+    }
+
+    if ($content -match '^\s*[^#;][^:]+:[^:]+$' -and -not ($content -match '^\s*senhahash\s*:')) {
+        throw "login.txt parece estar em formato legado com senha em texto puro."
+    }
+
+    $hasUser = $content -match '^\s*(usuario|user)\s*:'
+    $hasSalt = $content -match '^\s*salt\s*:'
+    $hasHash = $content -match '^\s*(senhahash|passwordhash)\s*:'
+    $iterationLine = $content | Where-Object { $_ -match '^\s*(iteracoes|iterations)\s*:' } | Select-Object -First 1
+
+    if (-not ($hasUser -and $hasSalt -and $hasHash -and $iterationLine)) {
+        throw "login.txt precisa conter os campos usuario, salt, senhahash e iteracoes."
+    }
+
+    $iterationsText = ($iterationLine -split ':', 2)[1].Trim()
+    [int]$iterations = 0
+    if (-not [int]::TryParse($iterationsText, [ref]$iterations) -or $iterations -lt 210000) {
+        throw "login.txt usa iterações PBKDF2 insuficientes."
+    }
 }
 
 try {
@@ -87,11 +154,15 @@ try {
     }
 
     if (-not (Test-Path -LiteralPath $projectPath)) {
-        throw ("Projeto '{0}' nao encontrado." -f $Project)
+        throw ("Projeto '{0}' não encontrado." -f $Project)
+    }
+
+    if (-not [string]::Equals($Configuration, "Release", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "O build portátil de segurança deve ser feito em Release."
     }
 
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        throw "O .NET SDK nao foi encontrado no PATH. Instale o .NET 8 SDK ou superior."
+        throw "O .NET SDK não foi encontrado no PATH. Instale o .NET 8 SDK ou superior."
     }
 
     $targetFramework = Get-TargetFramework -CsprojPath $projectPath
@@ -103,7 +174,7 @@ try {
 
     if ($UseExistingLogin) {
         if (-not (Test-Path -LiteralPath $loginPath)) {
-            throw "Nao existe login.txt para reutilizar."
+            throw "Não existe login.txt para reutilizar."
         }
 
         Write-Log "INFO" "Usando login.txt existente por parametro."
@@ -118,7 +189,7 @@ try {
             Write-Log "INFO" "login.txt atual encontrado com dica de senha."
         }
         else {
-            Write-Log "AVISO" "O login.txt atual nao possui dica de senha."
+            Write-Log "AVISO" "O login.txt atual não possui dica de senha."
         }
 
         $overwriteLogin = Read-Host "Deseja sobrescrever o login.txt atual e gerar um novo? [S/N]"
@@ -135,7 +206,7 @@ try {
 
     if ($generateLogin) {
         if (-not (Test-Path -LiteralPath $generateLoginScript)) {
-            throw "Generate-Login.ps1 nao foi encontrado."
+            throw "Generate-Login.ps1 não foi encontrado."
         }
 
         $userName = if (-not [string]::IsNullOrWhiteSpace($LoginUserName)) {
@@ -143,13 +214,6 @@ try {
         }
         else {
             Read-RequiredValue "Usuario do programa"
-        }
-
-        $passwordPlaintext = if (-not [string]::IsNullOrWhiteSpace($LoginPasswordPlaintext)) {
-            $LoginPasswordPlaintext
-        }
-        else {
-            Read-PasswordValue
         }
 
         $hint = if ($PSBoundParameters.ContainsKey("LoginHint")) {
@@ -160,9 +224,11 @@ try {
         }
 
         Write-Log "INFO" "Gerando login seguro com hash."
-        & $generateLoginScript -OutputPath $loginPath -UserName $userName -PasswordPlaintext $passwordPlaintext -Hint $hint
+        & $generateLoginScript -OutputPath $loginPath -UserName $userName -Hint $hint
         Write-Log "INFO" ("login.txt gerado em {0}" -f $loginPath)
     }
+
+    Assert-SafeLoginFile -Path $loginPath
 
     Write-Log "INFO" "Executando dotnet restore..."
     Invoke-And-Log { & dotnet restore $projectPath -r $RuntimeIdentifier }
@@ -170,14 +236,18 @@ try {
         throw ("Falha no dotnet restore. Veja o log em '{0}'." -f $logFile)
     }
 
+    Clear-PublishDirectory -ProjectRootPath $projectRoot -PublishDirectory $publishDir
+
     Write-Log "INFO" "Executando dotnet publish..."
     Invoke-And-Log {
         & dotnet publish $projectPath `
             -c $Configuration `
             -r $RuntimeIdentifier `
+            -o $publishDir `
             --self-contained true `
             --no-restore `
             /p:PublishSingleFile=true `
+            /p:IncludeNativeLibrariesForSelfExtract=true `
             /p:EnableCompressionInSingleFile=true `
             /p:DebugType=None `
             /p:DebugSymbols=false
@@ -186,14 +256,11 @@ try {
         throw ("Falha no dotnet publish. Veja o log em '{0}'." -f $logFile)
     }
 
-    if (Test-Path -LiteralPath $outputExe) {
+    if (Assert-PortableSingleExe -PublishDirectory $publishDir -ExpectedExePath $outputExe) {
         Write-Log "INFO" "Build concluido com sucesso."
+        Write-Log "INFO" "Pacote portátil válidado: somente o EXE final foi gerado."
         Write-Host ""
         Write-Host "EXE gerado em:"
-        Write-Host $outputExe
-    }
-    else {
-        Write-Log "AVISO" "O build terminou, mas o EXE nao foi localizado no caminho esperado."
         Write-Host $outputExe
     }
 

@@ -12,6 +12,10 @@ namespace CryptoFotos
         private System.Windows.Forms.ProgressBar progressBar;
         private System.Windows.Forms.Label lblStatus;
         private System.Windows.Forms.Button btnCancel;
+        private System.Windows.Forms.Button btnExportKey;
+        private System.Windows.Forms.Button btnImportKey;
+        private System.Windows.Forms.Button btnGenerateKey;
+        private System.Windows.Forms.Label lblSignature;
 
         protected override void Dispose(bool disposing)
         {
@@ -33,6 +37,10 @@ namespace CryptoFotos
             this.progressBar = new System.Windows.Forms.ProgressBar();
             this.lblStatus = new System.Windows.Forms.Label();
             this.btnCancel = new System.Windows.Forms.Button();
+            this.btnExportKey = new System.Windows.Forms.Button();
+            this.btnImportKey = new System.Windows.Forms.Button();
+            this.btnGenerateKey = new System.Windows.Forms.Button();
+            this.lblSignature = new System.Windows.Forms.Label();
             this.txtFolderPath.AllowDrop = true;
             this.txtFolderPath.DragEnter += new System.Windows.Forms.DragEventHandler(this.txtFolderPath_DragEnter);
             this.txtFolderPath.DragDrop += new System.Windows.Forms.DragEventHandler(this.txtFolderPath_DragDrop);
@@ -121,13 +129,59 @@ namespace CryptoFotos
             this.btnCancel.UseVisualStyleBackColor = true;
             this.btnCancel.Visible = false;
             this.btnCancel.Click += new System.EventHandler(this.btnCancel_Click);
+            //
+            // btnExportKey
+            //
+            this.btnExportKey.Location = new System.Drawing.Point(20, 330);
+            this.btnExportKey.Name = "btnExportKey";
+            this.btnExportKey.Size = new System.Drawing.Size(125, 23);
+            this.btnExportKey.TabIndex = 9;
+            this.btnExportKey.Text = "Exportar Chave";
+            this.btnExportKey.UseVisualStyleBackColor = true;
+            this.btnExportKey.Click += new System.EventHandler(this.btnExportKey_Click);
+            //
+            // btnImportKey
+            //
+            this.btnImportKey.BackColor = System.Drawing.Color.LightGray;
+            this.btnImportKey.Location = new System.Drawing.Point(155, 330);
+            this.btnImportKey.Name = "btnImportKey";
+            this.btnImportKey.Size = new System.Drawing.Size(115, 23);
+            this.btnImportKey.TabIndex = 10;
+            this.btnImportKey.Text = "Importar Chave";
+            this.btnImportKey.UseVisualStyleBackColor = true;
+            this.btnImportKey.Click += new System.EventHandler(this.btnImportKey_Click);
+            //
+            // btnGenerateKey
+            //
+            this.btnGenerateKey.Location = new System.Drawing.Point(280, 330);
+            this.btnGenerateKey.Name = "btnGenerateKey";
+            this.btnGenerateKey.Size = new System.Drawing.Size(90, 23);
+            this.btnGenerateKey.TabIndex = 11;
+            this.btnGenerateKey.Text = "Gerar Chave";
+            this.btnGenerateKey.UseVisualStyleBackColor = true;
+            this.btnGenerateKey.Click += new System.EventHandler(this.btnGenerateKey_Click);
+            //
+            // lblSignature
+            //
+            this.lblSignature.Font = new System.Drawing.Font("Segoe UI", 8F, System.Drawing.FontStyle.Italic, System.Drawing.GraphicsUnit.Point);
+            this.lblSignature.ForeColor = System.Drawing.Color.DimGray;
+            this.lblSignature.Location = new System.Drawing.Point(20, 360);
+            this.lblSignature.Name = "lblSignature";
+            this.lblSignature.Size = new System.Drawing.Size(350, 14);
+            this.lblSignature.TabIndex = 12;
+            this.lblSignature.Text = "MTSproductions@2026";
+            this.lblSignature.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // MainForm
             // 
             this.AllowDrop = true;
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(390, 370);
+            this.ClientSize = new System.Drawing.Size(390, 380);
+            this.Controls.Add(this.lblSignature);
+            this.Controls.Add(this.btnGenerateKey);
+            this.Controls.Add(this.btnImportKey);
+            this.Controls.Add(this.btnExportKey);
             this.Controls.Add(this.btnCancel);
             this.Controls.Add(this.progressBar);
             this.Controls.Add(this.lblStatus);

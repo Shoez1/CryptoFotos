@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -10,51 +10,44 @@ namespace CryptoFotos.Utils
 {
     internal sealed class LoginConfiguration
     {
-        public const int DefaultHashIterations = 210000;
+        public const int DefaultHashIterations = 600000;
+        public const int MinimumHashIterations = 210000;
+        public const int MinimumSaltSize = 16;
+        public const int MinimumHashSize = 32;
 
         public string? Hint { get; init; }
-        public bool UseDynamicPassword { get; init; }
         public string? UserName { get; init; }
-        public string? LegacyPassword { get; init; }
         public byte[]? PasswordSalt { get; init; }
         public byte[]? PasswordHash { get; init; }
         public int HashIterations { get; init; } = DefaultHashIterations;
 
         public bool ValidateCredentials(string userName, string password)
         {
-            if (UseDynamicPassword)
-            {
-                return false;
-            }
-
             if (!string.Equals(userName, UserName, StringComparison.Ordinal))
             {
                 return false;
             }
 
-            if (PasswordSalt != null && PasswordHash != null)
+            if (PasswordSalt == null || PasswordHash == null)
             {
-                byte[] computedHash = Rfc2898DeriveBytes.Pbkdf2(
-                    password,
-                    PasswordSalt,
-                    HashIterations,
-                    HashAlgorithmName.SHA256,
-                    PasswordHash.Length);
-
-                return CryptographicOperations.FixedTimeEquals(computedHash, PasswordHash);
+                return false;
             }
 
-            return !string.IsNullOrEmpty(LegacyPassword)
-                && string.Equals(password, LegacyPassword, StringComparison.Ordinal);
-        }
+            byte[] computedHash = Rfc2898DeriveBytes.Pbkdf2(
+                password,
+                PasswordSalt,
+                HashIterations,
+                HashAlgorithmName.SHA256,
+                PasswordHash.Length);
 
-        public string GetExpectedDynamicPassword(DateTime currentTime)
-        {
-            int nextDay = currentTime.Day == DateTime.DaysInMonth(currentTime.Year, currentTime.Month)
-                ? 1
-                : currentTime.Day + 1;
-            int previousHour = (currentTime.Hour + 23) % 24;
-            return $"{nextDay}{previousHour}";
+            try
+            {
+                return CryptographicOperations.FixedTimeEquals(computedHash, PasswordHash);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(computedHash);
+            }
         }
     }
 
@@ -91,9 +84,7 @@ namespace CryptoFotos.Utils
         private static LoginConfiguration Parse(IEnumerable<string> lines)
         {
             string? hint = null;
-            bool useDynamicPassword = false;
             string? userName = null;
-            string? legacyPassword = null;
             byte[]? passwordSalt = null;
             byte[]? passwordHash = null;
             int hashIterations = LoginConfiguration.DefaultHashIterations;
@@ -101,7 +92,9 @@ namespace CryptoFotos.Utils
             foreach (string rawLine in lines)
             {
                 string line = rawLine.Trim();
-                if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#", StringComparison.Ordinal) || line.StartsWith(";", StringComparison.Ordinal))
+                if (string.IsNullOrWhiteSpace(line) ||
+                    line.StartsWith("#", StringComparison.Ordinal) ||
+                    line.StartsWith(";", StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -118,8 +111,7 @@ namespace CryptoFotos.Utils
                 switch (key.ToLowerInvariant())
                 {
                     case "senhapadrao":
-                        useDynamicPassword = value.Equals("sim", StringComparison.OrdinalIgnoreCase);
-                        break;
+                        throw new InvalidOperationException("O modo senhapadrao foi removido por segurança.");
                     case "dicadesenha":
                         hint = value;
                         break;
@@ -136,41 +128,43 @@ namespace CryptoFotos.Utils
                         break;
                     case "iteracoes":
                     case "iterations":
-                        if (!int.TryParse(value, out hashIterations) || hashIterations < 10000)
+                        if (!int.TryParse(value, out hashIterations) ||
+                            hashIterations < LoginConfiguration.MinimumHashIterations)
                         {
-                            throw new InvalidOperationException("O valor de iterações do login.txt é inválido.");
+                            throw new InvalidOperationException("O valor de iterações do login.txt e inválido.");
                         }
                         break;
                     case "version":
                     case "debug":
                         break;
                     default:
-                        if (userName == null && legacyPassword == null)
-                        {
-                            userName = key;
-                            legacyPassword = value;
-                        }
-                        break;
+                        throw new InvalidOperationException("Formato legado de login em texto puro não é mais aceito.");
                 }
             }
 
-            if (!useDynamicPassword)
-            {
-                bool hasHashedCredential = !string.IsNullOrWhiteSpace(userName) && passwordSalt != null && passwordHash != null;
-                bool hasLegacyCredential = !string.IsNullOrWhiteSpace(userName) && !string.IsNullOrWhiteSpace(legacyPassword);
+            bool hasHashedCredential = !string.IsNullOrWhiteSpace(userName) &&
+                passwordSalt != null &&
+                passwordHash != null;
 
-                if (!hasHashedCredential && !hasLegacyCredential)
-                {
-                    throw new InvalidOperationException("login.txt embutido está vazio ou mal formatado.");
-                }
+            if (!hasHashedCredential)
+            {
+                throw new InvalidOperationException("login.txt embutido está vazio ou mal formatado.");
+            }
+
+            if (passwordSalt!.Length < LoginConfiguration.MinimumSaltSize)
+            {
+                throw new InvalidOperationException("O salt do login.txt e muito curto.");
+            }
+
+            if (passwordHash!.Length < LoginConfiguration.MinimumHashSize)
+            {
+                throw new InvalidOperationException("O hash do login.txt e muito curto.");
             }
 
             return new LoginConfiguration
             {
                 Hint = hint,
-                UseDynamicPassword = useDynamicPassword,
                 UserName = userName,
-                LegacyPassword = legacyPassword,
                 PasswordSalt = passwordSalt,
                 PasswordHash = passwordHash,
                 HashIterations = hashIterations

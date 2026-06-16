@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -49,11 +49,6 @@ namespace CryptoFotos
                 MessageBox.Show($"Erro fatal: {exception?.Message ?? "Erro inesperado."}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(1);
             };
-
-#if DEBUG
-            Application.Run(new MainForm());
-            return;
-#endif
 
             using var login = new LoginForm();
             if (login.ShowDialog() == DialogResult.OK)

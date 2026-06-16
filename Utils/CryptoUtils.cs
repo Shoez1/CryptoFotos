@@ -1,181 +1,213 @@
 using System;
 using System.IO;
-using System.Security.Cryptography;
 using System.Text;
 
 namespace CryptoFotos.Utils
 {
     public static class CryptoUtils
     {
-        private static readonly byte[] key = new byte[32]
-        {
-            0xD2, 0x7A, 0xE4, 0x1B, 0xC5, 0xF8, 0x3C, 0xA9,
-            0x5E, 0xB0, 0x6D, 0xF3, 0x21, 0x8C, 0x47, 0x9F,
-            0x13, 0x6B, 0xC8, 0x2E, 0xA4, 0x7D, 0xF1, 0x35,
-            0xB8, 0x0F, 0x92, 0xE7, 0x54, 0x3A, 0xC1, 0x68
-        };
+        private static byte[]? importedKey;
+        private static byte[]? importedIV;
 
-        // Mantido apenas para compatibilidade com arquivos antigos em AES-CBC.
-        private static readonly byte[] iv = new byte[16]
-        {
-            0xA1, 0x3F, 0xC6, 0x8B, 0xD7, 0x24, 0xE9, 0x5C,
-            0x7E, 0xB2, 0x0D, 0xF4, 0x69, 0x13, 0x8A, 0x57
-        };
-
-        private static readonly byte[] FormatMagic = Encoding.ASCII.GetBytes("CFG1");
-        private const int NonceSize = 12;
-        private const int TagSize = 16;
+        public static bool IsCustomKeyActive => importedKey != null && importedIV != null;
 
         public static string Encrypt(string plainText)
         {
             byte[] plainBytes = Encoding.UTF8.GetBytes(plainText);
-            return Convert.ToBase64String(EncryptBytes(plainBytes));
+
+            try
+            {
+                return Convert.ToBase64String(EncryptBytes(plainBytes));
+            }
+            finally
+            {
+                ClearSensitiveBytes(plainBytes);
+            }
         }
 
         public static string Decrypt(string cipherText)
         {
             byte[] encryptedBytes = Convert.FromBase64String(cipherText);
-            return Encoding.UTF8.GetString(DecryptBytes(encryptedBytes));
+            byte[] plainBytes = DecryptBytes(encryptedBytes);
+
+            try
+            {
+                return Encoding.UTF8.GetString(plainBytes);
+            }
+            finally
+            {
+                ClearSensitiveBytes(encryptedBytes);
+                ClearSensitiveBytes(plainBytes);
+            }
         }
 
-        public static byte[] EncryptBytes(byte[] data) => EncryptBytesWithKey(data, key, iv);
-
-        public static byte[] DecryptBytes(byte[] data) => DecryptBytesWithKey(data, key, iv);
-
-        public static byte[] GetKey() => (byte[])key.Clone();
-
-        public static byte[] GetIV() => (byte[])iv.Clone();
-
-        public static byte[] DecryptBytesWithKey(byte[] data, byte[] customKey, byte[] customIV)
+        public static byte[] EncryptBytes(byte[] data)
         {
-            ValidateKey(customKey);
+            (byte[] keyBytes, byte[] ivBytes) = GetActiveKeyMaterial();
 
-            if (data == null)
+            try
             {
-                throw new ArgumentNullException(nameof(data));
+                return EncryptBytesWithKey(data, keyBytes, ivBytes);
             }
-
-            if (IsCurrentFormat(data))
+            finally
             {
-                return DecryptCurrentFormat(data, customKey);
+                ClearSensitiveBytes(keyBytes);
+                ClearSensitiveBytes(ivBytes);
             }
+        }
 
-            ValidateIv(customIV);
-            return DecryptLegacyFormat(data, customKey, customIV);
+        public static byte[] DecryptBytes(byte[] data)
+        {
+            (byte[] keyBytes, byte[] ivBytes) = GetActiveKeyMaterial();
+
+            try
+            {
+                return DecryptBytesWithKey(data, keyBytes, ivBytes);
+            }
+            finally
+            {
+                ClearSensitiveBytes(keyBytes);
+                ClearSensitiveBytes(ivBytes);
+            }
         }
 
         public static byte[] EncryptBytesWithKey(byte[] data, byte[] customKey, byte[] customIV)
         {
-            ValidateKey(customKey);
-
-            if (data == null)
-            {
-                throw new ArgumentNullException(nameof(data));
-            }
-
-            byte[] nonce = RandomNumberGenerator.GetBytes(NonceSize);
-            byte[] ciphertext = new byte[data.Length];
-            byte[] tag = new byte[TagSize];
-
-            using (var aes = new AesGcm(customKey, TagSize))
-            {
-                aes.Encrypt(nonce, data, ciphertext, tag);
-            }
-
-            using var output = new MemoryStream(FormatMagic.Length + NonceSize + TagSize + ciphertext.Length);
-            output.Write(FormatMagic, 0, FormatMagic.Length);
-            output.Write(nonce, 0, nonce.Length);
-            output.Write(tag, 0, tag.Length);
-            output.Write(ciphertext, 0, ciphertext.Length);
-            return output.ToArray();
+            return CryptoCommon.SharedCrypto.EncryptBytesWithKey(data, customKey, customIV);
         }
 
-        private static byte[] DecryptCurrentFormat(byte[] data, byte[] customKey)
+        public static byte[] DecryptBytesWithKey(byte[] data, byte[] customKey, byte[] customIV)
         {
-            int minimumSize = FormatMagic.Length + NonceSize + TagSize;
-            if (data.Length < minimumSize)
-            {
-                throw new CryptographicException("Arquivo criptografado inválido ou truncado.");
-            }
+            return CryptoCommon.SharedCrypto.DecryptBytesWithKey(data, customKey, customIV);
+        }
 
-            byte[] nonce = new byte[NonceSize];
-            byte[] tag = new byte[TagSize];
-            byte[] ciphertext = new byte[data.Length - minimumSize];
+        public static byte[] GetKey()
+        {
+            (byte[] keyBytes, byte[] ivBytes) = GetOrCreateUserKeyMaterial();
+            ClearSensitiveBytes(ivBytes);
+            return keyBytes;
+        }
 
-            Buffer.BlockCopy(data, FormatMagic.Length, nonce, 0, nonce.Length);
-            Buffer.BlockCopy(data, FormatMagic.Length + nonce.Length, tag, 0, tag.Length);
-            Buffer.BlockCopy(data, minimumSize, ciphertext, 0, ciphertext.Length);
+        public static byte[] GetIV()
+        {
+            (byte[] keyBytes, byte[] ivBytes) = GetOrCreateUserKeyMaterial();
+            ClearSensitiveBytes(keyBytes);
+            return ivBytes;
+        }
 
-            byte[] plaintext = new byte[ciphertext.Length];
+        public static (byte[] Key, byte[] IV) GetOrCreateUserKeyMaterial()
+        {
+            return CryptoCommon.SharedCrypto.GetOrCreateUserKeyMaterial();
+        }
+
+        public static (byte[] Key, byte[] IV) GenerateNewKeyMaterial()
+        {
+            return CryptoCommon.SharedCrypto.GenerateNewKeyMaterial();
+        }
+
+        public static bool HasAuthenticatedFormat(byte[] data)
+        {
+            return CryptoCommon.SharedCrypto.HasAuthenticatedFormat(data);
+        }
+
+        public static byte[] CreateProtectedKeyFileBytes(byte[] keyBytes, byte[] ivBytes)
+        {
+            return CryptoCommon.SharedCrypto.CreateProtectedKeyFileBytes(keyBytes, ivBytes);
+        }
+
+        public static bool IsProtectedKeyFile(byte[] data)
+        {
+            return CryptoCommon.SharedCrypto.IsProtectedKeyFile(data);
+        }
+
+        public static (byte[] Key, byte[] IV) ParseProtectedKeyFile(byte[] keyFileBytes)
+        {
+            return CryptoCommon.SharedCrypto.ParseProtectedKeyFile(keyFileBytes);
+        }
+
+        public static void ImportKeyAndIV(byte[] customKey, byte[] customIV)
+        {
+            ClearImportedKeyAndIV();
+            importedKey = (byte[])customKey.Clone();
+            importedIV = (byte[])customIV.Clone();
+        }
+
+        public static void ClearImportedKeyAndIV()
+        {
+            ClearSensitiveBytes(importedKey);
+            ClearSensitiveBytes(importedIV);
+            importedKey = null;
+            importedIV = null;
+        }
+
+        public static void ExportKeyAndIV(string filePath)
+        {
+            (byte[] keyBytes, byte[] ivBytes) = GetActiveKeyMaterial();
+            byte[]? keyFileBytes = null;
 
             try
             {
-                using var aes = new AesGcm(customKey, TagSize);
-                aes.Decrypt(nonce, ciphertext, tag, plaintext);
-                return plaintext;
+                keyFileBytes = CreateProtectedKeyFileBytes(keyBytes, ivBytes);
+                File.WriteAllText(filePath, Convert.ToBase64String(keyFileBytes), new UTF8Encoding(false));
             }
-            catch (CryptographicException ex)
+            finally
             {
-                throw new CryptographicException(
-                    "Falha ao validar os dados criptografados. A chave pode estar incorreta ou o arquivo pode ter sido alterado.",
-                    ex);
+                ClearSensitiveBytes(keyBytes);
+                ClearSensitiveBytes(ivBytes);
+                ClearSensitiveBytes(keyFileBytes);
             }
         }
 
-        private static byte[] DecryptLegacyFormat(byte[] data, byte[] customKey, byte[] customIV)
+        public static bool ImportKeyAndIVFromFile(string filePath)
         {
-            using Aes aes = Aes.Create();
-            aes.Key = customKey;
-            aes.IV = customIV;
+            byte[]? importedBytes = null;
 
-            using var input = new MemoryStream(data);
-            using var cryptoStream = new CryptoStream(input, aes.CreateDecryptor(), CryptoStreamMode.Read);
-            using var output = new MemoryStream();
-            cryptoStream.CopyTo(output);
-            return output.ToArray();
-        }
-
-        private static bool IsCurrentFormat(byte[] data)
-        {
-            if (data.Length < FormatMagic.Length)
+            try
             {
-                return false;
-            }
-
-            for (int index = 0; index < FormatMagic.Length; index++)
-            {
-                if (data[index] != FormatMagic[index])
+                importedBytes = ReadKeyFileBytes(filePath);
+                if (!IsProtectedKeyFile(importedBytes))
                 {
                     return false;
                 }
+
+                (byte[] keyBytes, byte[] ivBytes) = ParseProtectedKeyFile(importedBytes);
+                ImportKeyAndIV(keyBytes, ivBytes);
+                ClearSensitiveBytes(keyBytes);
+                ClearSensitiveBytes(ivBytes);
+                return true;
             }
-
-            return true;
-        }
-
-        private static void ValidateKey(byte[] customKey)
-        {
-            if (customKey == null)
+            finally
             {
-                throw new ArgumentNullException(nameof(customKey));
-            }
-
-            if (customKey.Length != 32)
-            {
-                throw new ArgumentException("A chave precisa ter 32 bytes para AES-256.", nameof(customKey));
+                ClearSensitiveBytes(importedBytes);
             }
         }
 
-        private static void ValidateIv(byte[] customIV)
+        public static void ClearSensitiveBytes(byte[]? data)
         {
-            if (customIV == null)
+            CryptoCommon.SharedCrypto.ClearSensitiveBytes(data);
+        }
+
+        private static (byte[] Key, byte[] IV) GetActiveKeyMaterial()
+        {
+            if (importedKey != null && importedIV != null)
             {
-                throw new ArgumentNullException(nameof(customIV));
+                return ((byte[])importedKey.Clone(), (byte[])importedIV.Clone());
             }
 
-            if (customIV.Length != 16)
+            return GetOrCreateUserKeyMaterial();
+        }
+
+        private static byte[] ReadKeyFileBytes(string filePath)
+        {
+            string content = File.ReadAllText(filePath).Trim();
+
+            try
             {
-                throw new ArgumentException("O IV precisa ter 16 bytes para compatibilidade com o formato antigo.", nameof(customIV));
+                return Convert.FromBase64String(content);
+            }
+            catch (FormatException)
+            {
+                return File.ReadAllBytes(filePath);
             }
         }
     }

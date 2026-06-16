@@ -1,4 +1,4 @@
-namespace CryptoFotos
+﻿namespace CryptoFotos
 {
     partial class LoginForm
     {

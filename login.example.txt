@@ -1,16 +1,13 @@
-# Exemplo de login seguro para o CryptoFotos.
+﻿# Exemplo de login seguro para o CryptoFotos.
 # Copie para login.txt se quiser preparar o build manualmente.
 
 version:1.5
 usuario:admin
 salt:BASE64_DO_SALT
 senhahash:BASE64_DO_HASH_PBKDF2_SHA256
-iteracoes:210000
+iteracoes:600000
 dicadesenha:sua dica opcional
 
-# Formato legado ainda aceito por compatibilidade:
-# admin:123456
-# dicadesenha:sua dica opcional
-
-# Modo de senha dinamica (menos seguro, nao recomendado):
-# senhapadrao:sim
+# Formatos removidos por segurança:
+# - usuario:senha em texto puro
+# - senhapadrao:sim
