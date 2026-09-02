@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Windows.Forms;
 using CryptoFotos.Utils;
 
@@ -6,7 +6,6 @@ namespace CryptoFotos
 {
     public partial class LoginForm : Form
     {
-        private const string AppVersion = "1.5";
         private readonly LoginConfiguration loginConfiguration;
         private readonly string defaultHintText;
         private readonly bool defaultHintVisible;
@@ -16,11 +15,26 @@ namespace CryptoFotos
         public LoginForm()
         {
             InitializeComponent();
-            Text = $"Login - CryptoFotos - v{AppVersion}";
-            loginConfiguration = LoginConfigurationLoader.LoadFromEmbeddedResource();
+            Text = $"Login - CryptoFotos v{AppInfo.Version}";
+
+            try
+            {
+                loginConfiguration = LoginConfigurationLoader.LoadFromEmbeddedResource();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Configuração de login inválida: {ex.Message}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                throw;
+            }
+
             ApplyLoginConfiguration();
             defaultHintText = lblHint.Text;
             defaultHintVisible = lblHint.Visible;
+        }
+
+        private void chkShowPass_CheckedChanged(object? sender, EventArgs e)
+        {
+            txtPass.PasswordChar = chkShowPass.Checked ? '\0' : '*';
         }
 
         private void ApplyLoginConfiguration()
@@ -29,16 +43,18 @@ namespace CryptoFotos
             {
                 lblHint.Text = $"Dica de senha: {loginConfiguration.Hint}";
                 lblHint.Visible = true;
+                return;
             }
-            else
-            {
-                lblHint.Visible = false;
-            }
+
+            lblHint.Visible = false;
         }
 
         private async void ApplyLockoutAsync()
         {
             btnLogin.Enabled = false;
+            txtUser.Enabled = false;
+            txtPass.Enabled = false;
+            chkShowPass.Enabled = false;
 
             while (DateTime.UtcNow < lockoutUntilUtc)
             {
@@ -49,8 +65,12 @@ namespace CryptoFotos
             }
 
             btnLogin.Enabled = true;
+            txtUser.Enabled = true;
+            txtPass.Enabled = true;
+            chkShowPass.Enabled = true;
             lblHint.Text = defaultHintText;
             lblHint.Visible = defaultHintVisible;
+            txtPass.Focus();
         }
 
         private void RegisterFailure(string message)
@@ -71,28 +91,38 @@ namespace CryptoFotos
             MessageBox.Show(message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
-        private void btnLogin_Click(object sender, EventArgs e)
+        private void btnLogin_Click(object? sender, EventArgs e)
         {
             if (DateTime.UtcNow < lockoutUntilUtc)
             {
                 TimeSpan remaining = lockoutUntilUtc - DateTime.UtcNow;
                 MessageBox.Show(
                     $"Muitas tentativas de login. Aguarde {Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds))} segundos.",
-                    "Protecao",
+                    "Proteção",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
                 return;
             }
 
-            if (loginConfiguration.ValidateCredentials(txtUser.Text, txtPass.Text))
+            string user = txtUser.Text.Trim();
+            string pass = txtPass.Text;
+
+            if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(pass))
             {
+                MessageBox.Show("Informe o usuário e a senha.", "Atenção", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (loginConfiguration.ValidateCredentials(user, pass))
+            {
+                failedAttempts = 0;
                 txtPass.Text = string.Empty;
                 DialogResult = DialogResult.OK;
                 Close();
                 return;
             }
 
-            RegisterFailure("Usuario ou senha inválidos!");
+            RegisterFailure("Usuário ou senha inválidos!");
         }
     }
 }

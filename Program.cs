@@ -1,37 +1,24 @@
-﻿using System;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
+using System;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace CryptoFotos
 {
     static class Program
     {
-        [DllImport("kernel32.dll")]
-        private static extern bool IsDebuggerPresent();
-
         [STAThread]
         static void Main()
         {
 #if !DEBUG
-            if (Debugger.IsAttached || IsDebuggerPresent())
-            {
-                MessageBox.Show("Execução não permitida em modo de depuração.", "Proteção", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Environment.Exit(1);
-            }
+            Security.AntiDebug.EnforceAtStartup();
+            Security.IntegrityGuard.EnforceAtStartup();
 
-            System.Threading.Tasks.Task.Run(() =>
+            var watchdog = new Thread(SecurityWatchdog)
             {
-                while (true)
-                {
-                    if (Debugger.IsAttached || IsDebuggerPresent())
-                    {
-                        Environment.Exit(1);
-                    }
-
-                    System.Threading.Thread.Sleep(1000);
-                }
-            });
+                IsBackground = true,
+                Name = "SecurityWatchdog"
+            };
+            watchdog.Start();
 #endif
 
             Application.EnableVisualStyles();
@@ -56,5 +43,29 @@ namespace CryptoFotos
                 Application.Run(new MainForm());
             }
         }
+
+#if !DEBUG
+        private static void SecurityWatchdog()
+        {
+            var random = new Random();
+            int tick = 0;
+
+            while (true)
+            {
+                if (Security.AntiDebug.IsBeingDebugged())
+                {
+                    Environment.Exit(1);
+                }
+
+                tick++;
+                if (tick % 20 == 0 && Security.IntegrityGuard.IsTampered())
+                {
+                    Environment.Exit(1);
+                }
+
+                Thread.Sleep(500 + random.Next(300));
+            }
+        }
+#endif
     }
 }

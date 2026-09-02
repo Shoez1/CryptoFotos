@@ -1,14 +1,15 @@
-﻿param(
+param(
     [string]$Project = "CryptoFotos.csproj",
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-x64",
-    [switch]$ForceRegenerateLogin,
-    [switch]$UseExistingLogin,
-    [string]$LoginUserName,
-    [string]$LoginHint
+    [switch]$ForceLogin,
+    [string]$UserName,
+    [string]$PasswordPlaintext,
+    [string]$Hint
 )
 
 $ErrorActionPreference = "Stop"
+$hintParameterProvided = $PSBoundParameters.ContainsKey("Hint")
 
 $projectRoot = $PSScriptRoot
 $projectPath = Join-Path $projectRoot $Project
@@ -31,8 +32,13 @@ function Write-Log {
 
 function Read-RequiredValue {
     param(
-        [string]$Prompt
+        [string]$Prompt,
+        [string]$CurrentValue
     )
+
+    if (-not [string]::IsNullOrWhiteSpace($CurrentValue)) {
+        return $CurrentValue
+    }
 
     $value = Read-Host $Prompt
     if ([string]::IsNullOrWhiteSpace($value)) {
@@ -40,6 +46,22 @@ function Read-RequiredValue {
     }
 
     return $value
+}
+
+function Read-PasswordValue {
+    param([string]$CurrentValue)
+
+    if (-not [string]::IsNullOrWhiteSpace($CurrentValue)) {
+        return $CurrentValue
+    }
+
+    $securePassword = Read-Host "Senha do programa" -AsSecureString
+    $password = [System.Net.NetworkCredential]::new('', $securePassword).Password
+    if ([string]::IsNullOrWhiteSpace($password)) {
+        throw "Senha inválida."
+    }
+
+    return $password
 }
 
 function Invoke-And-Log {
@@ -54,213 +76,323 @@ function Invoke-And-Log {
     }
 }
 
-function Get-TargetFramework {
-    param(
-        [string]$CsprojPath
-    )
+function Test-LoginFileHasSecureHash {
+    param([string]$Path)
 
-    [xml]$projectXml = Get-Content -LiteralPath $CsprojPath
-    $framework = $projectXml.Project.PropertyGroup.TargetFramework | Select-Object -First 1
-    if ([string]::IsNullOrWhiteSpace($framework)) {
-        throw "Não foi possível identificar o TargetFramework no arquivo do projeto."
-    }
-
-    return $framework
-}
-
-function Clear-PublishDirectory {
-    param(
-        [string]$ProjectRootPath,
-        [string]$PublishDirectory
-    )
-
-    if (-not (Test-Path -LiteralPath $PublishDirectory)) {
-        return
-    }
-
-    $resolvedProjectRoot = [System.IO.Path]::GetFullPath($ProjectRootPath.TrimEnd('\') + '\')
-    $resolvedPublishDirectory = [System.IO.Path]::GetFullPath($PublishDirectory)
-
-    if (-not $resolvedPublishDirectory.StartsWith($resolvedProjectRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw ("Caminho de publish inválido para limpeza: {0}" -f $resolvedPublishDirectory)
-    }
-
-    Write-Log "INFO" ("Limpando publish anterior em {0}" -f $PublishDirectory)
-    Remove-Item -LiteralPath $PublishDirectory -Recurse -Force
-}
-
-function Assert-PortableSingleExe {
-    param(
-        [string]$PublishDirectory,
-        [string]$ExpectedExePath
-    )
-
-    if (-not (Test-Path -LiteralPath $ExpectedExePath)) {
-        Write-Log "AVISO" "O build terminou, mas o EXE não foi localizado no caminho esperado."
-        Write-Host $ExpectedExePath
+    if (-not (Test-Path -LiteralPath $Path)) {
         return $false
     }
 
-    $extraFiles = Get-ChildItem -LiteralPath $PublishDirectory -File |
-        Where-Object { -not [string]::Equals($_.FullName, $ExpectedExePath, [System.StringComparison]::OrdinalIgnoreCase) }
+    $lines = Get-Content -LiteralPath $Path
+    $hasUser = $false
+    $hasSalt = $false
+    $hasHash = $false
+    $hasIterations = $false
 
-    if ($extraFiles) {
-        $extraNames = ($extraFiles | ForEach-Object { $_.Name }) -join ", "
-        throw ("O build gerou arquivos extras ao lado do EXE: {0}. O executável final não está portátil sozinho." -f $extraNames)
+    foreach ($line in $lines) {
+        if ($line -match '^\s*(debug|senhapadrao)\s*:') {
+            return $false
+        }
+        if ($line -match '^\s*(usuario|user)\s*:') {
+            $hasUser = $true
+        }
+        elseif ($line -match '^\s*salt\s*:') {
+            $hasSalt = $true
+        }
+        elseif ($line -match '^\s*(senhahash|passwordhash)\s*:') {
+            $hasHash = $true
+        }
+        elseif ($line -match '^\s*(iteracoes|iterations)\s*:') {
+            $hasIterations = $true
+        }
     }
 
+    return $hasUser -and $hasSalt -and $hasHash -and $hasIterations
+}
+
+function Test-LoginFileHasHint {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    return [bool](Select-String -LiteralPath $Path -Pattern '^\s*dicadesenha\s*:\s*\S+' -Quiet)
+}
+
+function Set-LoginFileHint {
+    param(
+        [string]$Path,
+        [string]$HintValue
+    )
+
+    if ([string]::IsNullOrWhiteSpace($HintValue)) {
+        return $false
+    }
+
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    $newLines = New-Object System.Collections.Generic.List[string]
+    $hintWritten = $false
+
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        if ($line -match '^\s*dicadesenha\s*:') {
+            if (-not $hintWritten) {
+                $newLines.Add(("dicadesenha:{0}" -f $HintValue))
+                $hintWritten = $true
+            }
+        }
+        else {
+            $newLines.Add($line)
+        }
+    }
+
+    if (-not $hintWritten) {
+        $newLines.Add(("dicadesenha:{0}" -f $HintValue))
+    }
+
+    [System.IO.File]::WriteAllLines($Path, $newLines, $encoding)
     return $true
 }
 
-function Assert-SafeLoginFile {
+function Get-ProjectProperty {
     param(
-        [string]$Path
+        [xml]$ProjectXml,
+        [string]$Name
     )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
-        throw "login.txt não encontrado."
+    $values = @($ProjectXml.Project.PropertyGroup | ForEach-Object { $_.$Name } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($values.Count -eq 0) {
+        return $null
     }
 
-    $content = Get-Content -LiteralPath $Path
-    if ($content -match '^\s*senhapadrao\s*:\s*sim\s*$') {
-        throw "login.txt usa senhapadrao, que foi removido por segurança."
+    return [string]$values[0]
+}
+
+function Write-IntegrityTokenFile {
+    param(
+        [string]$Path,
+        [string]$Modulus,
+        [string]$Exponent
+    )
+
+    $content = @"
+namespace CryptoFotos.Security
+{
+    // <auto-generated>
+    // Escrito por Build-Exe.ps1 com a chave pública da assinatura deste build.
+    internal static class IntegrityToken
+    {
+        public const string ModulusBase64 = "$Modulus";
+        public const string ExponentBase64 = "$Exponent";
+
+        public static bool HasToken => ModulusBase64.Length > 0 && ExponentBase64.Length > 0;
+    }
+}
+"@
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $content, $encoding)
+}
+
+function Add-IntegrityOverlay {
+    param(
+        [string]$ExePath,
+        [System.Security.Cryptography.RSA]$Rsa
+    )
+
+    $exeBytes = [System.IO.File]::ReadAllBytes($ExePath)
+    $signature = $Rsa.SignData(
+        $exeBytes,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+        [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+
+    # Layout do overlay: [magic 8][assinatura N][tamanho 4] — o campo de tamanho
+    # fica no FINAL do arquivo para o IntegrityGuard localizar a assinatura.
+    $magic = [System.Text.Encoding]::ASCII.GetBytes("CTXSIGN1")
+    $lengthField = [BitConverter]::GetBytes([int]$signature.Length)
+
+    $stream = [System.IO.File]::Open($ExePath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write)
+    try {
+        $stream.Write($magic, 0, $magic.Length)
+        $stream.Write($signature, 0, $signature.Length)
+        $stream.Write($lengthField, 0, $lengthField.Length)
+    }
+    finally {
+        $stream.Dispose()
     }
 
-    if ($content -match '^\s*[^#;][^:]+:[^:]+$' -and -not ($content -match '^\s*senhahash\s*:')) {
-        throw "login.txt parece estar em formato legado com senha em texto puro."
-    }
-
-    $hasUser = $content -match '^\s*(usuario|user)\s*:'
-    $hasSalt = $content -match '^\s*salt\s*:'
-    $hasHash = $content -match '^\s*(senhahash|passwordhash)\s*:'
-    $iterationLine = $content | Where-Object { $_ -match '^\s*(iteracoes|iterations)\s*:' } | Select-Object -First 1
-
-    if (-not ($hasUser -and $hasSalt -and $hasHash -and $iterationLine)) {
-        throw "login.txt precisa conter os campos usuario, salt, senhahash e iteracoes."
-    }
-
-    $iterationsText = ($iterationLine -split ':', 2)[1].Trim()
-    [int]$iterations = 0
-    if (-not [int]::TryParse($iterationsText, [ref]$iterations) -or $iterations -lt 210000) {
-        throw "login.txt usa iterações PBKDF2 insuficientes."
-    }
+    return $signature.Length
 }
 
 try {
     Write-Log "INFO" ("Iniciando build em {0}" -f $projectRoot)
 
-    if ($ForceRegenerateLogin -and $UseExistingLogin) {
-        throw "Use apenas uma opcao entre ForceRegenerateLogin e UseExistingLogin."
+    if ($Configuration -ne "Release") {
+        throw "Build de distribuicao deve usar Configuration=Release."
+    }
+
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        throw "O .NET SDK não foi encontrado no PATH. Instale o .NET SDK usado pelo projeto."
     }
 
     if (-not (Test-Path -LiteralPath $projectPath)) {
         throw ("Projeto '{0}' não encontrado." -f $Project)
     }
 
-    if (-not [string]::Equals($Configuration, "Release", [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "O build portátil de segurança deve ser feito em Release."
+    [xml]$projectXml = Get-Content -LiteralPath $projectPath -Raw
+    $targetFramework = Get-ProjectProperty -ProjectXml $projectXml -Name "TargetFramework"
+    if ([string]::IsNullOrWhiteSpace($targetFramework)) {
+        throw "TargetFramework não encontrado no projeto."
     }
 
-    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        throw "O .NET SDK não foi encontrado no PATH. Instale o .NET 8 SDK ou superior."
+    $assemblyName = Get-ProjectProperty -ProjectXml $projectXml -Name "AssemblyName"
+    if ([string]::IsNullOrWhiteSpace($assemblyName)) {
+        $assemblyName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
     }
 
-    $targetFramework = Get-TargetFramework -CsprojPath $projectPath
-    $assemblyName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
     $publishDir = Join-Path $projectRoot ("bin\{0}\{1}\{2}\publish" -f $Configuration, $targetFramework, $RuntimeIdentifier)
     $outputExe = Join-Path $publishDir ("{0}.exe" -f $assemblyName)
 
-    $generateLogin = $false
-
-    if ($UseExistingLogin) {
-        if (-not (Test-Path -LiteralPath $loginPath)) {
-            throw "Não existe login.txt para reutilizar."
-        }
-
-        Write-Log "INFO" "Usando login.txt existente por parametro."
-    }
-    elseif ($ForceRegenerateLogin) {
-        $generateLogin = $true
-        Write-Log "INFO" "Regenerando login.txt por parametro."
-    }
-    elseif (Test-Path -LiteralPath $loginPath) {
-        $hasHint = Select-String -Path $loginPath -Pattern '^\s*dicadesenha:' -Quiet
-        if ($hasHint) {
-            Write-Log "INFO" "login.txt atual encontrado com dica de senha."
-        }
-        else {
-            Write-Log "AVISO" "O login.txt atual não possui dica de senha."
-        }
-
-        $overwriteLogin = Read-Host "Deseja sobrescrever o login.txt atual e gerar um novo? [S/N]"
-        if ($overwriteLogin -match '^(s|sim)$') {
-            $generateLogin = $true
-        }
-        else {
-            Write-Log "INFO" "Usando login.txt existente."
-        }
-    }
-    else {
-        $generateLogin = $true
-    }
+    $loginHasSecureHash = Test-LoginFileHasSecureHash -Path $loginPath
+    $loginHasHint = Test-LoginFileHasHint -Path $loginPath
+    $generateLogin = $ForceLogin -or -not $loginHasSecureHash
 
     if ($generateLogin) {
         if (-not (Test-Path -LiteralPath $generateLoginScript)) {
             throw "Generate-Login.ps1 não foi encontrado."
         }
 
-        $userName = if (-not [string]::IsNullOrWhiteSpace($LoginUserName)) {
-            $LoginUserName
-        }
-        else {
-            Read-RequiredValue "Usuario do programa"
+        if (Test-Path -LiteralPath $loginPath) {
+            Write-Log "AVISO" "login.txt atual não possui credenciais seguras completas ou contem opções legadas; ele será regenerado."
         }
 
-        $hint = if ($PSBoundParameters.ContainsKey("LoginHint")) {
-            $LoginHint
-        }
-        else {
-            Read-Host "Dica de senha (opcional)"
+        $userNameValue = Read-RequiredValue -Prompt "Usuario do programa" -CurrentValue $UserName
+        $passwordPlaintextValue = Read-PasswordValue -CurrentValue $PasswordPlaintext
+
+        if (-not $hintParameterProvided) {
+            $Hint = Read-Host "Dica de senha (opcional)"
+            $hintParameterProvided = $true
         }
 
-        Write-Log "INFO" "Gerando login seguro com hash."
-        & $generateLoginScript -OutputPath $loginPath -UserName $userName -Hint $hint
+        Write-Log "INFO" "Gerando login seguro com PBKDF2-SHA256."
+        & $generateLoginScript -OutputPath $loginPath -UserName $userNameValue -PasswordPlaintext $passwordPlaintextValue -Hint $Hint
+        if (-not $?) {
+            throw "Falha ao gerar login.txt."
+        }
+
+        $passwordPlaintextValue = $null
         Write-Log "INFO" ("login.txt gerado em {0}" -f $loginPath)
     }
+    else {
+        if ($loginHasHint) {
+            Write-Log "INFO" "login.txt seguro encontrado com dica de senha."
+        }
+        else {
+            Write-Log "AVISO" "login.txt seguro encontrado, mas sem dica de senha."
+        }
 
-    Assert-SafeLoginFile -Path $loginPath
+        $overwriteLogin = Read-Host "login.txt seguro encontrado. Deseja gerar um novo? [S/N]"
+        if ($overwriteLogin -match '^(s|sim)$') {
+            $userNameValue = Read-RequiredValue -Prompt "Usuario do programa" -CurrentValue $UserName
+            $passwordPlaintextValue = Read-PasswordValue -CurrentValue $PasswordPlaintext
+            if (-not $hintParameterProvided) {
+                $Hint = Read-Host "Dica de senha (opcional)"
+                $hintParameterProvided = $true
+            }
+
+            Write-Log "INFO" "Gerando novo login seguro com PBKDF2-SHA256."
+            & $generateLoginScript -OutputPath $loginPath -UserName $userNameValue -PasswordPlaintext $passwordPlaintextValue -Hint $Hint
+            if (-not $?) {
+                throw "Falha ao gerar login.txt."
+            }
+
+            $passwordPlaintextValue = $null
+        }
+        else {
+            if (-not $loginHasHint) {
+                if (-not $hintParameterProvided) {
+                    $Hint = Read-Host "Dica de senha (opcional)"
+                    $hintParameterProvided = $true
+                }
+
+                if (Set-LoginFileHint -Path $loginPath -HintValue $Hint) {
+                    Write-Log "INFO" "Dica de senha adicionada ao login.txt existente."
+                }
+                else {
+                    Write-Log "AVISO" "Nenhuma dica de senha foi informada."
+                }
+            }
+
+            Write-Log "INFO" "Usando login.txt existente."
+        }
+    }
 
     Write-Log "INFO" "Executando dotnet restore..."
-    Invoke-And-Log { & dotnet restore $projectPath -r $RuntimeIdentifier }
+    Invoke-And-Log { & dotnet restore $projectPath }
     if ($LASTEXITCODE -ne 0) {
         throw ("Falha no dotnet restore. Veja o log em '{0}'." -f $logFile)
     }
 
-    Clear-PublishDirectory -ProjectRootPath $projectRoot -PublishDirectory $publishDir
+    $tokenFilePath = Join-Path $projectRoot "Security\IntegrityToken.g.cs"
+    $previousToken = $null
+    $signatureBytes = 0
+    $signingCompleted = $false
 
-    Write-Log "INFO" "Executando dotnet publish..."
-    Invoke-And-Log {
-        & dotnet publish $projectPath `
-            -c $Configuration `
-            -r $RuntimeIdentifier `
-            -o $publishDir `
-            --self-contained true `
-            --no-restore `
-            /p:PublishSingleFile=true `
-            /p:IncludeNativeLibrariesForSelfExtract=true `
-            /p:EnableCompressionInSingleFile=true `
-            /p:DebugType=None `
-            /p:DebugSymbols=false
+    try {
+        if (Test-Path -LiteralPath $tokenFilePath) {
+            $previousToken = [System.IO.File]::ReadAllText($tokenFilePath)
+        }
+
+        $signingRsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new(2048)
+        $publicParams = $signingRsa.ExportParameters($false)
+        $modulus = [Convert]::ToBase64String($publicParams.Modulus)
+        $exponent = [Convert]::ToBase64String($publicParams.Exponent)
+        Write-IntegrityTokenFile -Path $tokenFilePath -Modulus $modulus -Exponent $exponent
+        Write-Log "INFO" "Chave de assinatura gerada; token de integridade escrito antes do publish."
+
+        Write-Log "INFO" "Executando dotnet publish..."
+        Invoke-And-Log {
+            & dotnet publish $projectPath `
+                -c $Configuration `
+                -r $RuntimeIdentifier `
+                --self-contained true `
+                /p:PublishSingleFile=true `
+                /p:EnableCompressionInSingleFile=true `
+                /p:DebugType=None `
+                /p:DebugSymbols=false
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw ("Falha no dotnet publish. Veja o log em '{0}'." -f $logFile)
+        }
+
+        if (Test-Path -LiteralPath $outputExe) {
+            $signatureBytes = Add-IntegrityOverlay -ExePath $outputExe -Rsa $signingRsa
+            $signingCompleted = $true
+            Write-Log "INFO" ("Assinatura de integridade aplicada ao EXE ({0} bytes)." -f $signatureBytes)
+        }
     }
-    if ($LASTEXITCODE -ne 0) {
-        throw ("Falha no dotnet publish. Veja o log em '{0}'." -f $logFile)
+    finally {
+        if ($null -ne $previousToken) {
+            [System.IO.File]::WriteAllText($tokenFilePath, $previousToken)
+            Write-Log "INFO" "Token de integridade restaurado para o stub de desenvolvimento."
+        }
+        elseif (Test-Path -LiteralPath $tokenFilePath) {
+            Remove-Item -LiteralPath $tokenFilePath -Force
+        }
     }
 
-    if (Assert-PortableSingleExe -PublishDirectory $publishDir -ExpectedExePath $outputExe) {
-        Write-Log "INFO" "Build concluido com sucesso."
-        Write-Log "INFO" "Pacote portátil válidado: somente o EXE final foi gerado."
+    if (Test-Path -LiteralPath $outputExe) {
+        if ($signingCompleted) {
+            Write-Log "INFO" "Build concluido com sucesso (EXE assinado com token de integridade)."
+        }
+        else {
+            Write-Log "INFO" "Build concluido com sucesso (sem assinatura de integridade; o EXE usara auto-pin)."
+        }
         Write-Host ""
         Write-Host "EXE gerado em:"
+        Write-Host $outputExe
+    }
+    else {
+        Write-Log "AVISO" "O build terminou, mas o EXE não foi localizado no caminho esperado."
         Write-Host $outputExe
     }
 
@@ -268,5 +400,8 @@ try {
 }
 catch {
     Write-Log "ERRO" $_.Exception.Message
+    if ($null -ne $previousToken -and (Test-Path -LiteralPath $tokenFilePath)) {
+        [System.IO.File]::WriteAllText($tokenFilePath, $previousToken)
+    }
     exit 1
 }

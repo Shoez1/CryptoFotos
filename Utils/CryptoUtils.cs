@@ -11,6 +11,10 @@ namespace CryptoFotos.Utils
 
         public static bool IsCustomKeyActive => importedKey != null && importedIV != null;
 
+        public static string ActiveKeyDescription => IsCustomKeyActive
+            ? "Chave Personalizada (CSK3)"
+            : "Chave Padrão (Compartilhada)";
+
         public static string Encrypt(string plainText)
         {
             byte[] plainBytes = Encoding.UTF8.GetBytes(plainText);

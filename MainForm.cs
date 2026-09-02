@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -60,7 +60,6 @@ namespace CryptoFotos
             AttributesToSkip = FileAttributes.ReparsePoint
         };
 
-        private const string AppVersion = "1.5";
         private const int MaxFilesPerOperation = 5000;
         private const long MaxPlainImageSizeBytes = 100L * 1024L * 1024L;
         private const long MaxEncryptedFileSizeBytes = 140L * 1024L * 1024L;
@@ -75,8 +74,18 @@ namespace CryptoFotos
         {
             InitializeComponent();
             LoadLocalKeyMaterial();
-            Text = $"CryptoFotos - v{AppVersion}";
+            Text = $"CryptoFotos - v{AppInfo.Version}";
             FormClosed += MainForm_FormClosed;
+        }
+
+        private void MainForm_DragEnter(object sender, DragEventArgs e)
+        {
+            txtFolderPath_DragEnter(sender, e);
+        }
+
+        private void MainForm_DragDrop(object sender, DragEventArgs e)
+        {
+            txtFolderPath_DragDrop(sender, e);
         }
 
         private void MainForm_FormClosed(object? sender, FormClosedEventArgs e)
@@ -976,6 +985,11 @@ namespace CryptoFotos
 
             btnImportKey.Text = importedKeyActive ? "Chave Importada" : "Importar Chave";
             btnImportKey.BackColor = importedKeyActive ? Color.FromArgb(40, 167, 69) : Color.LightGray;
+
+            if (lblKeyStatus != null)
+            {
+                lblKeyStatus.Text = $"Chave ativa: {(importedKeyActive ? "Chave Personalizada (CSK3)" : "Chave Padrão (Compartilhada)")}";
+            }
         }
 
         private static byte[] CreateProtectedKeyFileBytes(byte[] keyBytes, byte[] ivBytes)
@@ -1104,8 +1118,7 @@ namespace CryptoFotos
                 activeKey = keyBytes;
                 activeIV = ivBytes;
                 importedKeyActive = true;
-                btnImportKey.Text = "Chave Gerada";
-                btnImportKey.BackColor = Color.FromArgb(40, 167, 69);
+                UpdateKeyButtonState();
 
                 MessageBox.Show(
                     "Nova chave gerada e carregada. Use Exportar Chave para salvar essa chave em arquivo.",
