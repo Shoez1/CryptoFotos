@@ -5,7 +5,11 @@ param(
     [switch]$ForceLogin,
     [string]$UserName,
     [string]$PasswordPlaintext,
-    [string]$Hint
+    [string]$Hint,
+    [switch]$KeepExistingKey,
+    [string]$ExportKeyPath,
+    [alias("no-pause")]
+    [switch]$NoPause
 )
 
 $ErrorActionPreference = "Stop"
@@ -166,6 +170,108 @@ function Get-ProjectProperty {
     }
 
     return [string]$values[0]
+}
+
+function Format-ByteArrayToCSharp {
+    param(
+        [byte[]]$Bytes,
+        [int]$BytesPerLine = 8
+    )
+
+    $rows = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $Bytes.Length; $i += $BytesPerLine) {
+        $count = [Math]::Min($BytesPerLine, $Bytes.Length - $i)
+        $slice = $Bytes[$i..($i + $count - 1)]
+        $hexItems = ($slice | ForEach-Object { "0x{0:X2}" -f $_ }) -join ", "
+        $rows.Add("            " + $hexItems)
+    }
+    return ($rows -join ",`r`n")
+}
+
+function Export-ProtectedKeyFile {
+    param(
+        [byte[]]$Key,
+        [byte[]]$Iv,
+        [string]$OutputPath
+    )
+
+    $keyFileMagic = [System.Text.Encoding]::ASCII.GetBytes("CSK3")
+    $buffer = New-Object byte[] ($keyFileMagic.Length + 32 + 16)
+    [Buffer]::BlockCopy($keyFileMagic, 0, $buffer, 0, $keyFileMagic.Length)
+    [Buffer]::BlockCopy($Key, 0, $buffer, $keyFileMagic.Length, 32)
+    [Buffer]::BlockCopy($Iv, 0, $buffer, $keyFileMagic.Length + 32, 16)
+
+    $base64 = [Convert]::ToBase64String($buffer)
+    $parent = Split-Path -Parent $OutputPath
+    if (-not [string]::IsNullOrWhiteSpace($parent) -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($OutputPath, $base64, $encoding)
+    [System.Array]::Clear($buffer, 0, $buffer.Length)
+}
+
+function Update-SharedCryptoKey {
+    param(
+        [string]$SharedCryptoFilePath,
+        [byte[]]$NewKey = $null,
+        [byte[]]$NewIv = $null
+    )
+
+    if (-not (Test-Path -LiteralPath $SharedCryptoFilePath)) {
+        throw ("Arquivo '{0}' não encontrado para rotação da chave embutida." -f $SharedCryptoFilePath)
+    }
+
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    if ($null -eq $NewKey) {
+        $NewKey = New-Object byte[] 32
+        $rng.GetBytes($NewKey)
+    }
+    if ($null -eq $NewIv) {
+        $NewIv = New-Object byte[] 16
+        $rng.GetBytes($NewIv)
+    }
+
+    if ($NewKey.Length -ne 32) {
+        throw "A chave AES-256 precisa ter 32 bytes."
+    }
+    if ($NewIv.Length -ne 16) {
+        throw "O IV precisa ter 16 bytes."
+    }
+
+    $content = [System.IO.File]::ReadAllText($SharedCryptoFilePath)
+
+    $keyPattern = '(?s)[ \t]*private\s+static\s+readonly\s+byte\[\]\s+EmbeddedDefaultKey\s*=\s*new\s+byte\[32\]\s*\{[^}]*\};'
+    $ivPattern = '(?s)[ \t]*private\s+static\s+readonly\s+byte\[\]\s+EmbeddedDefaultIV\s*=\s*new\s+byte\[16\]\s*\{[^}]*\};'
+
+    if (-not [System.Text.RegularExpressions.Regex]::IsMatch($content, $keyPattern)) {
+        throw "Não foi possível localizar o campo 'EmbeddedDefaultKey' em SharedCrypto.cs."
+    }
+    if (-not [System.Text.RegularExpressions.Regex]::IsMatch($content, $ivPattern)) {
+        throw "Não foi possível localizar o campo 'EmbeddedDefaultIV' em SharedCrypto.cs."
+    }
+
+    $formattedKey = Format-ByteArrayToCSharp -Bytes $NewKey
+    $formattedIv = Format-ByteArrayToCSharp -Bytes $NewIv
+
+    $keyReplacement = "        private static readonly byte[] EmbeddedDefaultKey = new byte[32]`r`n        {`r`n" + $formattedKey + "`r`n        };"
+    $ivReplacement = "        private static readonly byte[] EmbeddedDefaultIV = new byte[16]`r`n        {`r`n" + $formattedIv + "`r`n        };"
+
+    $content = [System.Text.RegularExpressions.Regex]::Replace($content, $keyPattern, $keyReplacement)
+    $content = [System.Text.RegularExpressions.Regex]::Replace($content, $ivPattern, $ivReplacement)
+
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($SharedCryptoFilePath, $content, $encoding)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $keyHash = [BitConverter]::ToString($sha256.ComputeHash($NewKey)).Replace("-", "")
+
+    return [PSCustomObject]@{
+        KeyHash = $keyHash
+        Key = $NewKey
+        Iv = $NewIv
+    }
 }
 
 function Write-IntegrityTokenFile {
@@ -333,13 +439,34 @@ try {
     }
 
     $tokenFilePath = Join-Path $projectRoot "Security\IntegrityToken.g.cs"
+    $sharedCryptoPath = Join-Path $projectRoot "Utils\SharedCrypto.cs"
     $previousToken = $null
+    $previousSharedCryptoContent = $null
     $signatureBytes = 0
     $signingCompleted = $false
 
     try {
         if (Test-Path -LiteralPath $tokenFilePath) {
             $previousToken = [System.IO.File]::ReadAllText($tokenFilePath)
+        }
+
+        if (Test-Path -LiteralPath $sharedCryptoPath) {
+            $previousSharedCryptoContent = [System.IO.File]::ReadAllText($sharedCryptoPath)
+        }
+
+        if (-not $KeepExistingKey) {
+            Write-Log "INFO" "Gerando nova chave criptográfica compartilhada embutida para tornar este build único..."
+            $keyResult = Update-SharedCryptoKey -SharedCryptoFilePath $sharedCryptoPath
+            Write-Log "INFO" ("Chave criptográfica compartilhada embutida atualizada em {0}" -f $sharedCryptoPath)
+            Write-Log "INFO" ("Fingerprint SHA-256 da nova chave AES-256: {0}" -f $keyResult.KeyHash)
+
+            if (-not [string]::IsNullOrWhiteSpace($ExportKeyPath)) {
+                Export-ProtectedKeyFile -Key $keyResult.Key -Iv $keyResult.Iv -OutputPath $ExportKeyPath
+                Write-Log "INFO" ("Chave embutida exportada (formato CSK3) para '{0}'." -f $ExportKeyPath)
+            }
+        }
+        else {
+            Write-Log "INFO" "Manutenção da chave embutida existente solicitada (-KeepExistingKey)."
         }
 
         $signingRsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new(2048)
@@ -402,6 +529,11 @@ catch {
     Write-Log "ERRO" $_.Exception.Message
     if ($null -ne $previousToken -and (Test-Path -LiteralPath $tokenFilePath)) {
         [System.IO.File]::WriteAllText($tokenFilePath, $previousToken)
+    }
+    if ($null -ne $previousSharedCryptoContent -and (Test-Path -LiteralPath $sharedCryptoPath)) {
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($sharedCryptoPath, $previousSharedCryptoContent, $encoding)
+        Write-Log "AVISO" "Utils\SharedCrypto.cs restaurado para o estado anterior devido à falha no build."
     }
     exit 1
 }

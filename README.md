@@ -1,4 +1,4 @@
-﻿# CryptoFotos
+# CryptoFotos
 
 CryptoFotos é um utilitário WinForms para Windows que criptografa e descriptografa fotos e imagens em lote.
 
@@ -41,6 +41,7 @@ Fluxo do build:
 - pede senha
 - pede dica de senha
 - executa `dotnet restore`
+- gera nova chave AES-256 e IV aleatórios a cada build, atualizando `Utils/SharedCrypto.cs` para tornar o executável único
 - executa `dotnet publish`
 
 Saída esperada:
@@ -66,7 +67,7 @@ Novos logins gerados pelos scripts usam `600000` iterações por padrão. O app 
 
 ## Chave de criptografia
 
-- A chave padrão fica incorporada ao executável e é igual nos três projetos.
+- A chave padrão é gerada e embutida no executável a cada build, tornando cada executável gerado único.
 - Use `Exportar Chave` para criar um backup `CSK3` sem senha.
 - Use `Importar Chave` para abrir arquivos criptografados em outra instalação ou com uma chave compartilhada.
 - Use `Gerar Chave` para criar uma chave totalmente nova e carregá-la na sessão atual; depois use `Exportar Chave` para salvar essa chave.
